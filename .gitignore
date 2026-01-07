@@ -1,0 +1,10 @@
+# WordPress
+.DS_Store
+*.log
+node_modules/
+.vscode/
+.idea/
+
+# Testing
+test-results/
+playwright-report/
