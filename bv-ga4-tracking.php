@@ -21,9 +21,10 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.0.0');
+define('BV_GA4_VERSION', '1.0.1');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('BV_GA4_PLUGIN_URL', plugin_dir_url(__FILE__));
+// Use plugins_url() directly for better symlink support
+define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
 
 /**
  * Main plugin class
@@ -59,19 +60,19 @@ class BV_GA4_Tracking {
     }
     
     /**
-     * Load Google Analytics gtag script
-     * Only loads if GA ID is configured
+     * Load Google Analytics gtag script (standard snippet per Google’s install docs).
+     * Only loads if GA ID is configured. No delay-load; no consent mode.
      */
     public function load_google_analytics() {
         if (!$this->is_tracking_enabled()) {
-            return; // Don't load anything if GA ID not set
+            return;
         }
         
         $ga_id = $this->get_ga_id();
-        
+        $gtag_src = 'https://www.googletagmanager.com/gtag/js?id=' . esc_attr($ga_id);
         ?>
         <!-- Google tag (gtag.js) -->
-        <script async src="https://www.googletagmanager.com/gtag/js?id=<?php echo esc_js($ga_id); ?>"></script>
+        <script src="<?php echo esc_attr($gtag_src); ?>" async></script>
         <script>
             window.dataLayer = window.dataLayer || [];
             window.gtag = window.gtag || function(){dataLayer.push(arguments);};
@@ -122,60 +123,167 @@ class BV_GA4_Tracking {
         }
         
         // Register and enqueue track.js
+        // Hardcode plugin directory name to avoid WordPress caching issues with symlinks
         wp_register_script(
             'bv-ga4-tracker',
-            BV_GA4_PLUGIN_URL . 'assets/track.js',
-            array('jquery'),
+            plugins_url('bv-ga4-tracking/assets/track.js'),
+            array(), // No dependencies - uses vanilla JS (jQuery only for WooCommerce events if available)
             BV_GA4_VERSION,
             true
         );
         wp_enqueue_script('bv-ga4-tracker');
         
-        // Prepare tracking data
+        // Prepare tracking data and events
         $tracking_data = array(
             'page_type' => 'other',
             'product_data' => null,
             'product_list' => array(),
             'cart_data' => null,
-            'order_data' => null
+            'order_data' => null,
+            'events' => array() // Events to fire immediately on page load
         );
         
-        // Determine page type and gather data
+        // Determine page type and gather data, prepare events
         // Check for product search (WordPress search or custom product search)
         if ($this->is_search_page() || $this->is_product_search()) {
             $tracking_data['page_type'] = 'search';
-            $tracking_data['search_term'] = $this->get_search_term();
+            $search_term = $this->get_search_term();
+            $product_list = $this->get_product_list_data();
+            $tracking_data['search_term'] = $search_term;
             $tracking_data['list_name'] = 'Search Results';
             $tracking_data['list_id'] = 'search_results';
-            $tracking_data['product_list'] = $this->get_product_list_data();
+            $tracking_data['product_list'] = $product_list;
+            
+            // Fire search event
+            $tracking_data['events'][] = array(
+                'name' => 'search',
+                'params' => array(
+                    'search_term' => $search_term,
+                    'results_count' => count($product_list)
+                )
+            );
+            
+            // Fire view_item_list event
+            $params = array(
+                'item_list_id' => 'search_results',
+                'item_list_name' => 'Search Results',
+                'item_list_count' => count($product_list),
+                'search_term' => $search_term
+            );
+            // Add filters if any query params
+            if (!empty($_GET)) {
+                $filters = array();
+                foreach ($_GET as $key => $value) {
+                    if (!in_array($key, array('s', 'q', 'keyword', 'paged', 'page'))) {
+                        $filters[] = $key . ':' . $value;
+                    }
+                }
+                if (!empty($filters)) {
+                    $params['item_list_filters'] = implode('|', $filters);
+                }
+            }
+            $tracking_data['events'][] = array(
+                'name' => 'view_item_list',
+                'params' => $params
+            );
+            
         } elseif (function_exists('is_product') && is_product()) {
             $tracking_data['page_type'] = 'product';
             $product_id = get_queried_object_id();
             if ($product_id) {
                 $product = wc_get_product($product_id);
                 if ($product && is_a($product, 'WC_Product')) {
-                    $tracking_data['product_data'] = $this->get_product_tracking_data($product);
+                    $product_data = $this->get_product_tracking_data($product);
+                    $tracking_data['product_data'] = $product_data;
+                    
+                    // Fire view_item event
+                    $tracking_data['events'][] = array(
+                        'name' => 'view_item',
+                        'params' => array(
+                            'currency' => 'USD',
+                            'value' => $product_data['price'],
+                            'items' => array($this->format_product_for_ga4($product_data))
+                        )
+                    );
                 }
             }
         } elseif (function_exists('is_shop') && is_shop()) {
             $tracking_data['page_type'] = 'shop';
+            $product_list = $this->get_product_list_data();
             $tracking_data['list_name'] = 'Shop';
             $tracking_data['list_id'] = 'shop';
-            $tracking_data['product_list'] = $this->get_product_list_data();
+            $tracking_data['product_list'] = $product_list;
+            
+            // Fire view_item_list event
+            $tracking_data['events'][] = array(
+                'name' => 'view_item_list',
+                'params' => array(
+                    'item_list_id' => 'shop',
+                    'item_list_name' => 'Shop',
+                    'item_list_count' => count($product_list)
+                )
+            );
         } elseif (function_exists('is_product_category') && is_product_category()) {
             $tracking_data['page_type'] = 'category';
             $category = get_queried_object();
+            $product_list = $this->get_product_list_data();
             if ($category) {
                 $tracking_data['list_name'] = $category->name;
                 $tracking_data['list_id'] = 'category_' . $category->term_id;
             }
-            $tracking_data['product_list'] = $this->get_product_list_data();
+            $tracking_data['product_list'] = $product_list;
+            
+            // Fire view_item_list event
+            $tracking_data['events'][] = array(
+                'name' => 'view_item_list',
+                'params' => array(
+                    'item_list_id' => $tracking_data['list_id'],
+                    'item_list_name' => $tracking_data['list_name'],
+                    'item_list_count' => count($product_list)
+                )
+            );
         } elseif (function_exists('is_checkout') && is_checkout() && !is_wc_endpoint_url('order-received')) {
             $tracking_data['page_type'] = 'checkout';
-            $tracking_data['cart_data'] = $this->get_cart_data();
+            $cart_data = $this->get_cart_data();
+            $tracking_data['cart_data'] = $cart_data;
+            
+            if ($cart_data && !empty($cart_data['items'])) {
+                // Fire begin_checkout event
+                $items = array();
+                foreach ($cart_data['items'] as $item) {
+                    $items[] = $this->format_product_for_ga4($item);
+                }
+                $tracking_data['events'][] = array(
+                    'name' => 'begin_checkout',
+                    'params' => array(
+                        'currency' => 'USD',
+                        'value' => $cart_data['total_value'],
+                        'item_total' => $cart_data['total_value'],
+                        'items' => $items
+                    )
+                );
+            }
         } elseif (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-received')) {
             $tracking_data['page_type'] = 'purchase';
-            $tracking_data['order_data'] = $this->get_order_data();
+            $order_data = $this->get_order_data();
+            $tracking_data['order_data'] = $order_data;
+            
+            if ($order_data && !empty($order_data['items'])) {
+                // Fire purchase event
+                $items = array();
+                foreach ($order_data['items'] as $item) {
+                    $items[] = $this->format_product_for_ga4($item);
+                }
+                $tracking_data['events'][] = array(
+                    'name' => 'purchase',
+                    'params' => array(
+                        'transaction_id' => (string)$order_data['transaction_id'],
+                        'currency' => 'USD',
+                        'value' => $order_data['value'],
+                        'items' => $items
+                    )
+                );
+            }
         }
         
         // Pass tracking data to JavaScript
@@ -291,6 +399,29 @@ class BV_GA4_Tracking {
         }
         
         return $data;
+    }
+    
+    /**
+     * Format product data for GA4 event
+     */
+    private function format_product_for_ga4($product_data) {
+        $formatted = array(
+            'item_id' => (string)($product_data['id'] ?? ''),
+            'item_name' => $product_data['name'] ?? '',
+            'item_category' => $product_data['category'] ?? '',
+            'item_brand' => $product_data['brand'] ?? '',
+            'price' => floatval($product_data['price'] ?? 0),
+            'quantity' => intval($product_data['quantity'] ?? 1),
+            'currency' => 'USD',
+            'sku' => $product_data['sku'] ?? ''
+        );
+        
+        // Add availability if stock status is provided
+        if (isset($product_data['in_stock'])) {
+            $formatted['availability'] = $product_data['in_stock'] ? 'in_stock' : 'out_of_stock';
+        }
+        
+        return $formatted;
     }
     
     /**
