@@ -50,6 +50,8 @@ class BV_GA4_Tracking {
         
         // Enqueue tracking script
         add_action('wp_enqueue_scripts', array($this, 'enqueue_tracking_script'), 20);
+        // Defer track.js so it doesn't chain on the critical path; page_view is sent by gtag inline in head
+        add_filter('script_loader_tag', array($this, 'defer_track_script'), 10, 3);
         
         // Admin settings
         add_action('admin_menu', array($this, 'add_admin_menu'));
@@ -133,7 +135,7 @@ class BV_GA4_Tracking {
         );
         wp_enqueue_script('bv-ga4-tracker');
         
-        // Prepare tracking data and events
+        // Prepare tracking data and events (inlined for track.js; events fire after script runs with defer)
         $tracking_data = array(
             'page_type' => 'other',
             'product_data' => null,
@@ -288,6 +290,19 @@ class BV_GA4_Tracking {
         
         // Pass tracking data to JavaScript
         wp_localize_script('bv-ga4-tracker', 'trackingData', $tracking_data);
+    }
+    
+    /**
+     * Defer track.js so it does not block the critical path. page_view is sent by gtag inline in head.
+     */
+    public function defer_track_script($tag, $handle, $src) {
+        if ($handle !== 'bv-ga4-tracker') {
+            return $tag;
+        }
+        if (strpos($tag, ' defer') !== false || strpos($tag, 'defer=') !== false) {
+            return $tag;
+        }
+        return preg_replace('/<script\s/', '<script defer ', $tag, 1);
     }
     
     /**
