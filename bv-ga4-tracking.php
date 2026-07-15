@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.0.0
+ * Version: 1.0.2
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.0.1');
+define('BV_GA4_VERSION', '1.0.2');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -147,7 +147,11 @@ class BV_GA4_Tracking {
         
         // Determine page type and gather data, prepare events
         // Check for product search (WordPress search or custom product search)
-        if ($this->is_search_page() || $this->is_product_search()) {
+        // A product URL can also satisfy the site's custom search detection
+        // (the live product route is under /shop). Product pages must win so
+        // the GA4 payload contains product_data and emits view_item.
+        if (($this->is_search_page() || $this->is_product_search()) &&
+            !(function_exists('is_product') && is_product())) {
             $tracking_data['page_type'] = 'search';
             $search_term = $this->get_search_term();
             $product_list = $this->get_product_list_data();
@@ -510,7 +514,19 @@ class BV_GA4_Tracking {
      * Get order data for purchase
      */
     private function get_order_data() {
-        $order_id = isset($_GET['order']) ? intval($_GET['order']) : 0;
+        // WooCommerce normally exposes the ID as the `order-received` query
+        // var on the thank-you page, not as `?order=`. Support both the
+        // pretty-permalink and query-string forms used by WooCommerce.
+        $order_id = 0;
+        if (function_exists('get_query_var')) {
+            $order_id = intval(get_query_var('order-received'));
+        }
+        if (!$order_id && isset($_GET['order-received'])) {
+            $order_id = intval($_GET['order-received']);
+        }
+        if (!$order_id && isset($_GET['order'])) {
+            $order_id = intval($_GET['order']);
+        }
         if (!$order_id) {
             return null;
         }
@@ -530,14 +546,16 @@ class BV_GA4_Tracking {
             $product_data = $this->get_product_tracking_data($product);
             if (!$product_data) continue;
             
-            $quantity = $item->get_quantity();
-            
+            $quantity = max(1, intval($item->get_quantity()));
+            $line_total = floatval($item->get_total());
+            $unit_price = $line_total > 0 ? $line_total / $quantity : floatval($product_data['price']);
+
             $items[] = array(
                 'id' => $product_data['id'],
                 'name' => $product_data['name'],
                 'category' => $product_data['category'],
                 'brand' => $product_data['brand'],
-                'price' => floatval($product_data['price']),
+                'price' => $unit_price,
                 'quantity' => $quantity,
                 'sku' => $product_data['sku'] ?? '',
                 'in_stock' => $product_data['in_stock'] ?? true

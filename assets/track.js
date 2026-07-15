@@ -8,6 +8,13 @@
     
     const tracking = window.trackingData;
     if (!tracking) return;
+
+    // Keep event dispatch in one place so deferred loading cannot silently
+    // drop a prepared ecommerce event when a page-specific branch changes.
+    function fireEvent(eventName, params) {
+        if (!eventName || typeof params !== 'object') return;
+        gtag('event', eventName, params);
+    }
     
     // Helper: Format product for GA4
     function formatProduct(product) {
@@ -32,7 +39,7 @@
     
     // 1. view_item (Product Page)
     if (tracking.page_type === 'product' && tracking.product_data) {
-        gtag('event', 'view_item', {
+        fireEvent('view_item', {
             currency: 'USD',
             value: tracking.product_data.price,
             items: [formatProduct(tracking.product_data)]
@@ -204,7 +211,7 @@
     
     // 8. purchase
     if (tracking.page_type === 'purchase' && tracking.order_data) {
-        gtag('event', 'purchase', {
+        fireEvent('purchase', {
             transaction_id: String(tracking.order_data.transaction_id || ''),
             currency: 'USD',
             value: tracking.order_data.value || 0,
