@@ -19,7 +19,9 @@
     // Helper: Format product for GA4
     function formatProduct(product) {
         return {
-            item_id: String(product.id || ''),
+            // Keep GA4 item_id aligned with the inventory/audit SKU key.
+            // Fall back to the WooCommerce ID only for products without a SKU.
+            item_id: String(product.sku || product.id || ''),
             item_name: product.name || '',
             item_category: product.category || '',
             item_brand: product.brand || '',
