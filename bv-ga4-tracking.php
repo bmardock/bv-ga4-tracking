@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.0.3
+ * Version: 1.0.4
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.0.3');
+define('BV_GA4_VERSION', '1.0.4');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -425,7 +425,7 @@ class BV_GA4_Tracking {
      */
     private function format_product_for_ga4($product_data) {
         $formatted = array(
-            'item_id' => (string)($product_data['id'] ?? ''),
+            'item_id' => (string)(!empty($product_data['sku']) ? $product_data['sku'] : ($product_data['id'] ?? '')),
             'item_name' => $product_data['name'] ?? '',
             'item_category' => $product_data['category'] ?? '',
             'item_brand' => $product_data['brand'] ?? '',
