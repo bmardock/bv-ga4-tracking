@@ -150,10 +150,11 @@ class BV_GA4_Tracking {
         // A product URL can also satisfy the site's custom search detection
         // (the live product route is under /shop). Product pages must win so
         // the GA4 payload contains product_data and emits view_item.
+        $search_term = $this->get_search_term();
         if (($this->is_search_page() || $this->is_product_search()) &&
+            $search_term !== '' &&
             !(function_exists('is_product') && is_product())) {
             $tracking_data['page_type'] = 'search';
-            $search_term = $this->get_search_term();
             $product_list = $this->get_product_list_data();
             $tracking_data['search_term'] = $search_term;
             $tracking_data['list_name'] = 'Search Results';
@@ -213,6 +214,29 @@ class BV_GA4_Tracking {
                     );
                 }
             }
+        } elseif (
+            (is_search() || is_page_template('page-search.php') ||
+             (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/find') !== false)) &&
+            $search_term === '' &&
+            !(function_exists('is_product') && is_product())
+        ) {
+            // Path-routed browse pages (/shop, /archive) — the router sends
+            // these through the search template with no real keyword.
+            $tracking_data['page_type'] = 'shop';
+            $path = isset($_SERVER['REQUEST_URI']) ? strtok($_SERVER['REQUEST_URI'], '?') : '';
+            $list_slug = trim($path, '/') !== '' ? trim($path, '/') : 'shop';
+            $product_list = $this->get_product_list_data();
+            $tracking_data['list_name'] = ucwords(str_replace(array('-', '/'), ' ', $list_slug));
+            $tracking_data['list_id'] = 'browse_' . sanitize_title($list_slug);
+            $tracking_data['product_list'] = $product_list;
+            $tracking_data['events'][] = array(
+                'name' => 'view_item_list',
+                'params' => array(
+                    'item_list_id' => $tracking_data['list_id'],
+                    'item_list_name' => $tracking_data['list_name'],
+                    'item_list_count' => count($product_list)
+                )
+            );
         } elseif (function_exists('is_shop') && is_shop()) {
             $tracking_data['page_type'] = 'shop';
             $product_list = $this->get_product_list_data();
@@ -353,20 +377,24 @@ class BV_GA4_Tracking {
      * Uses standard WordPress get_search_query() as primary method
      */
     private function get_search_term() {
-        // Primary: Use standard WordPress search query
-        $search_query = get_search_query();
-        if (!empty($search_query)) {
-            return $search_query;
-        }
-        
-        // Fallback: Custom search parameters (for backward compatibility)
+        // The live site's router rewrites browse routes (/shop, /archive)
+        // through the search template with the request path in the query
+        // param, so a term that looks like a path is navigation, not a
+        // search — returning it here polluted GA4 with search_term="/shop".
+        $candidates = array(get_search_query());
         if (isset($_GET['keyword'])) {
-            return sanitize_text_field($_GET['keyword']);
+            $candidates[] = sanitize_text_field(wp_unslash($_GET['keyword']));
         }
         if (isset($_GET['q'])) {
-            return sanitize_text_field($_GET['q']);
+            $candidates[] = sanitize_text_field(wp_unslash($_GET['q']));
         }
-        
+        foreach ($candidates as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate === '' || strpos($candidate, '/') === 0) {
+                continue;
+            }
+            return $candidate;
+        }
         return '';
     }
     
