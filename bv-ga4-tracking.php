@@ -62,8 +62,15 @@ class BV_GA4_Tracking {
     }
     
     /**
-     * Load Google Analytics gtag script (standard snippet per Google’s install docs).
-     * Only loads if GA ID is configured. No delay-load; no consent mode.
+     * Load Google Analytics gtag script (Google's standard snippet), with one
+     * change: gtag.js itself is fetched once the page has loaded (or on the
+     * first tap/keypress, if sooner) rather than in <head>. See BEST_PRACTICES.md.
+     *
+     * The dataLayer stub and config still run first thing, so page_view and every
+     * event track.js fires before then are queued and sent when gtag.js arrives.
+     * Checkout and the order-received page (where purchase fires) load it right
+     * away. Filter `bv_ga4_load_after_page` returns false to restore the plain
+     * async tag everywhere.
      */
     public function load_google_analytics() {
         if (!$this->is_tracking_enabled()) {
@@ -74,7 +81,25 @@ class BV_GA4_Tracking {
         $gtag_src = 'https://www.googletagmanager.com/gtag/js?id=' . esc_attr($ga_id);
         ?>
         <!-- Google tag (gtag.js) -->
+        <?php if ($this->load_after_page()) : ?>
+        <script>
+            (function(){
+                var done = false;
+                function go(){
+                    if (done) return;
+                    done = true;
+                    var s = document.createElement('script');
+                    s.async = true;
+                    s.src = <?php echo wp_json_encode($gtag_src); ?>;
+                    document.head.appendChild(s);
+                }
+                if (document.readyState === 'complete') { go(); } else { window.addEventListener('load', go); }
+                ['pointerdown', 'keydown'].forEach(function(e){ window.addEventListener(e, go, {once: true, passive: true}); });
+            })();
+        </script>
+        <?php else : ?>
         <script src="<?php echo esc_attr($gtag_src); ?>" async></script>
+        <?php endif; ?>
         <script>
             window.dataLayer = window.dataLayer || [];
             window.gtag = window.gtag || function(){dataLayer.push(arguments);};
@@ -86,6 +111,16 @@ class BV_GA4_Tracking {
         <?php
     }
     
+    /**
+     * Fetch gtag.js after the page has loaded, so it doesn't compete with the
+     * page's own images and scripts (~190KB on a phone connection). Not on
+     * checkout or the order-received page, where the conversion events fire.
+     */
+    private function load_after_page() {
+        $checkout = function_exists('is_checkout') && is_checkout();
+        return (bool) apply_filters('bv_ga4_load_after_page', !$checkout);
+    }
+
     /**
      * Get GA4 Measurement ID from plugin setting only
      */
