@@ -28,6 +28,13 @@ The plugin will automatically enable tracking once an ID is set. If no ID is con
 - **remove_from_cart** - When products are removed from cart
 - **begin_checkout** - Checkout page views (also fires on express checkout)
 - **add_shipping_info** - Shipping method selection
+- **view_cart** - Cart page views
+- **add_payment_info** - Place order pressed, with `payment_type`
+- **checkout_step** - Checkout progress, once each per visit: `step` = contact, address, shipping_shown, payment_selected (shopper's own pick), place_order, express_pay
+- **checkout_error** - Error shown after Place order (WooCommerce notices or Square's card message), `error_message` with digits masked
+- **checkout_exit** - Left checkout without ordering: `last_step`, `value`, `shipping`
+
+add_to_cart also covers adds that reload the page (the product page form, `?add-to-cart=` links): the add is queued in the WooCommerce session, a `bv_ga4_pending` cookie is set, and track.js fetches the queued event from `admin-ajax.php?action=bv_ga4_pending` on the next page. Nothing is printed into cacheable HTML. No names, emails or addresses are sent with the checkout events.
 - **purchase** - Completed orders
 
 ### Express Checkout
