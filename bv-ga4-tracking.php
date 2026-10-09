@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.0.4
+ * Version: 1.1.0
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.0.4');
+define('BV_GA4_VERSION', '1.1.0');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -59,6 +59,73 @@ class BV_GA4_Tracking {
         
         // Add settings link to plugin page
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_settings_link'));
+
+        // add_to_cart for adds that reload the page (the product page's form,
+        // ?add-to-cart= links, the Instagram/Facebook checkout link): queued in
+        // the session and picked up by track.js on the next page. See
+        // queue_add_to_cart().
+        add_action('woocommerce_add_to_cart', array($this, 'queue_add_to_cart'), 10, 6);
+        add_action('wp_ajax_bv_ga4_pending', array($this, 'send_pending_events'));
+        add_action('wp_ajax_nopriv_bv_ga4_pending', array($this, 'send_pending_events'));
+    }
+
+    /**
+     * An add that reloads the page never fires WooCommerce's JS
+     * `added_to_cart` event, so track.js never saw it: GA4 had add_to_cart
+     * counts with no items (from another tag) and every product showed 0
+     * carted. The add is queued in the WooCommerce session and a short cookie
+     * tells track.js to fetch it from admin-ajax on the next page. It can't
+     * be printed into the page: product pages are cached at the edge, and an
+     * event in cached HTML would be replayed for every visitor.
+     * AJAX adds (wc-ajax=add_to_cart) are skipped; track.js already catches
+     * those from `added_to_cart`.
+     */
+    public function queue_add_to_cart($cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data) {
+        if (!$this->is_tracking_enabled() || wp_doing_ajax() || !function_exists('WC') || !WC()->session) {
+            return;
+        }
+        $product = wc_get_product($variation_id ? $variation_id : $product_id);
+        $data = $product ? $this->get_product_tracking_data($product) : null;
+        if (!$data) {
+            return;
+        }
+        $data['quantity'] = max(1, (int) $quantity);
+        $pending = (array) WC()->session->get('bv_ga4_pending', array());
+        $pending[] = array('name' => 'add_to_cart', 'item' => $data);
+        WC()->session->set('bv_ga4_pending', array_slice($pending, -10));
+        if (!headers_sent()) {
+            setcookie('bv_ga4_pending', '1', 0, COOKIEPATH ? COOKIEPATH : '/', COOKIE_DOMAIN, is_ssl(), false);
+        }
+    }
+
+    /** admin-ajax: hand queued events to track.js once, then clear them. */
+    public function send_pending_events() {
+        $pending = array();
+        if (function_exists('WC') && WC()->session) {
+            $pending = (array) WC()->session->get('bv_ga4_pending', array());
+            WC()->session->set('bv_ga4_pending', array());
+        }
+        if (!headers_sent()) {
+            setcookie('bv_ga4_pending', '', time() - 3600, COOKIEPATH ? COOKIEPATH : '/', COOKIE_DOMAIN, is_ssl(), false);
+        }
+        nocache_headers();
+        $events = array();
+        foreach ($pending as $event) {
+            if (empty($event['item'])) {
+                continue;
+            }
+            $item = $this->format_product_for_ga4($event['item']);
+            $events[] = array(
+                'name' => 'add_to_cart',
+                'params' => array(
+                    'currency' => 'USD',
+                    'value' => (float) $event['item']['price'] * (int) $event['item']['quantity'],
+                    'items' => array($item),
+                    'checkout_type' => 'standard',
+                ),
+            );
+        }
+        wp_send_json($events);
     }
     
     /**
@@ -307,6 +374,10 @@ class BV_GA4_Tracking {
                     'item_list_count' => count($product_list)
                 )
             );
+        } elseif (function_exists('is_cart') && is_cart()) {
+            // view_cart (fired by track.js from cart_data)
+            $tracking_data['page_type'] = 'cart';
+            $tracking_data['cart_data'] = $this->get_cart_data();
         } elseif (function_exists('is_checkout') && is_checkout() && !is_wc_endpoint_url('order-received')) {
             $tracking_data['page_type'] = 'checkout';
             $cart_data = $this->get_cart_data();
@@ -351,6 +422,9 @@ class BV_GA4_Tracking {
             }
         }
         
+        // Where track.js picks up queued events (see queue_add_to_cart()).
+        $tracking_data['ajax_url'] = admin_url('admin-ajax.php');
+
         // Pass tracking data to JavaScript
         wp_localize_script('bv-ga4-tracker', 'trackingData', $tracking_data);
     }
@@ -767,6 +841,11 @@ class BV_GA4_Tracking {
                 <li><strong>remove_from_cart</strong> - When products are removed from cart</li>
                 <li><strong>begin_checkout</strong> - Checkout page views</li>
                 <li><strong>add_shipping_info</strong> - Shipping method selection</li>
+                <li><strong>view_cart</strong> - Cart page views</li>
+                <li><strong>add_payment_info</strong> - Place order pressed (payment_type)</li>
+                <li><strong>checkout_step</strong> - Checkout progress: contact, address, shipping_shown, payment_selected, place_order, express_pay</li>
+                <li><strong>checkout_error</strong> - Error shown after Place order (error_message)</li>
+                <li><strong>checkout_exit</strong> - Left checkout without ordering (last_step, shipping)</li>
                 <li><strong>purchase</strong> - Completed orders</li>
             </ul>
             
