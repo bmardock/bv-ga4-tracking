@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.1.1
+ * Version: 1.2.1
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.1.1');
+define('BV_GA4_VERSION', '1.2.1');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -90,12 +90,27 @@ class BV_GA4_Tracking {
             return;
         }
         $data['quantity'] = max(1, (int) $quantity);
+        $data['atc_source'] = $this->add_to_cart_source();
         $pending = (array) WC()->session->get('bv_ga4_pending', array());
         $pending[] = array('name' => 'add_to_cart', 'item' => $data);
         WC()->session->set('bv_ga4_pending', array_slice($pending, -10));
         if (!headers_sent()) {
             setcookie('bv_ga4_pending', '1', 0, COOKIEPATH ? COOKIEPATH : '/', COOKIE_DOMAIN, is_ssl(), false);
         }
+    }
+
+    /**
+     * Which control added a page-reloading add to cart. track.js stamps the
+     * product form with bv_atc_source (product_page, sticky, quick_view) as it
+     * submits; a ?add-to-cart= link has none.
+     */
+    private function add_to_cart_source() {
+        $allowed = array('product_page', 'sticky', 'quick_view');
+        $posted = isset($_POST['bv_atc_source']) ? sanitize_key(wp_unslash($_POST['bv_atc_source'])) : '';
+        if (in_array($posted, $allowed, true)) {
+            return $posted;
+        }
+        return isset($_GET['add-to-cart']) ? 'link' : 'product_page';
     }
 
     /** admin-ajax: hand queued events to track.js once, then clear them. */
@@ -122,6 +137,7 @@ class BV_GA4_Tracking {
                     'value' => (float) $event['item']['price'] * (int) $event['item']['quantity'],
                     'items' => array($item),
                     'checkout_type' => 'standard',
+                    'atc_source' => isset($event['item']['atc_source']) ? $event['item']['atc_source'] : 'product_page',
                 ),
             );
         }

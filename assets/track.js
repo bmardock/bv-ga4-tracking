@@ -44,7 +44,42 @@
         fireEvent('view_item', {
             currency: 'USD',
             value: tracking.product_data.price,
-            items: [formatProduct(tracking.product_data)]
+            items: [formatProduct(tracking.product_data)],
+            // Event-scoped so GA4 can split product views into in-stock and
+            // sold: most product views are sold pieces, which can't be bought.
+            in_stock: tracking.product_data.in_stock ? 'yes' : 'no'
+        });
+    }
+
+    // 1b. Which control added to cart (atc_source on add_to_cart). The product
+    // form reloads the page, so stamp it as it submits and the server passes
+    // the value back with the queued event: the theme's sticky bar sets
+    // form.dataset.bvAtcSource = 'sticky' before clicking the real button;
+    // forms inside Quick View are 'quick_view'.
+    function formSource(form) {
+        if (form.dataset && form.dataset.bvAtcSource) return form.dataset.bvAtcSource;
+        return form.closest('#QuickViewProductPopup') ? 'quick_view' : 'product_page';
+    }
+    document.addEventListener('submit', function(e) {
+        const form = e.target;
+        if (!form || !form.matches || !form.matches('form.cart')) return;
+        let input = form.querySelector('input[name="bv_atc_source"]');
+        if (!input) {
+            input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'bv_atc_source';
+            form.appendChild(input);
+        }
+        input.value = formSource(form);
+        if (form.dataset) delete form.dataset.bvAtcSource;
+    }, true);
+
+    // 1c. Apple Pay / Google Pay / PayPal taps outside checkout (the cart's
+    // wallet buttons skip begin_checkout entirely). Checkout has its own
+    // checkout_step 'express_pay' below.
+    if (tracking.page_type !== 'checkout' && typeof jQuery !== 'undefined') {
+        jQuery(document.body).on('click', '.wc-square-wallet-buttons button, #wc-square-digital-wallet button, #apple-pay-button, #wc-square-google-pay, .paypal-buttons, [id^="paypal-button"]', function() {
+            fireEvent('express_pay_click', { pay_location: tracking.page_type || 'other', currency: 'USD' });
         });
     }
     
@@ -111,10 +146,22 @@
             let product = null;
             let qty = 1;
             
+            let source = 'card';
+            const fromCard = $button && $button.length && !$button.closest('form.cart').length;
+            // A card on a product page (related / sold-page rows): not the
+            // page's own product. No price list here, so send what the button has.
+            if (tracking.page_type === 'product' && fromCard && !tracking.product_list) {
+                const id = parseInt($button.data('product_id'), 10);
+                if (id) {
+                    product = { id: id, sku: String($button.data('product_sku') || ''), name: String($button.attr('aria-label') || '').replace(/^Add (?:to cart: )?|[\u201c\u201d"]|\s*to your cart$/g, ''), price: parseFloat(String($button.closest('.product').find('.price ins .amount, .price > .amount, .price .amount').last().text()).replace(/[^0-9.]/g, '')) || 0 };
+                }
+            }
             // Product page: use tracking.product_data
-            if (tracking.page_type === 'product' && tracking.product_data) {
+            else if (tracking.page_type === 'product' && tracking.product_data && !fromCard) {
                 product = tracking.product_data;
                 qty = parseInt(jQuery('form.cart input[name="quantity"]').val() || 1);
+                const form = document.querySelector('form.cart');
+                source = form ? formSource(form) : 'product_page';
             }
             // Archive pages: get product from list
             else if ($button && $button.length && tracking.product_list) {
@@ -135,7 +182,8 @@
                     currency: 'USD',
                     value: product.price * qty,
                     items: [formatProduct({ ...product, quantity: qty })],
-                    checkout_type: 'standard' // Standard add to cart (not express)
+                    checkout_type: 'standard', // Standard add to cart (not express)
+                    atc_source: source
                 });
             }
         });
