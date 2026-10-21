@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.2.1');
+define('BV_GA4_VERSION', '1.2.2');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -552,20 +552,26 @@ class BV_GA4_Tracking {
             }
         }
         
-        // Get brand from attributes
-        $attributes = $product->get_attributes();
-        if (!empty($attributes)) {
-            foreach ($attributes as $key => $attribute) {
-                if (strpos($key, 'brand') !== false || $key === 'pa_brand') {
-                    if (is_object($attribute) && method_exists($attribute, 'get_options')) {
-                        $options = $attribute->get_options();
-                        if (!empty($options[0])) {
-                            $data['brand'] = $options[0];
+        // Brand: the theme's one reader (custom text attribute first, then the
+        // product_brand term). The local copy below is the fallback for a site
+        // running this plugin without the theme.
+        if (function_exists('bv_product_brand')) {
+            $data['brand'] = bv_product_brand($product_id);
+        } else {
+            $attributes = $product->get_attributes();
+            if (!empty($attributes)) {
+                foreach ($attributes as $key => $attribute) {
+                    if (strpos($key, 'brand') !== false) {
+                        if (is_object($attribute) && method_exists($attribute, 'get_options')) {
+                            $options = $attribute->get_options();
+                            if (!empty($options[0])) {
+                                $data['brand'] = $options[0];
+                            }
+                        } elseif (is_array($attribute) && !empty($attribute['value'])) {
+                            $data['brand'] = $attribute['value'];
                         }
-                    } elseif (is_array($attribute) && !empty($attribute['value'])) {
-                        $data['brand'] = $attribute['value'];
+                        break;
                     }
-                    break;
                 }
             }
         }
