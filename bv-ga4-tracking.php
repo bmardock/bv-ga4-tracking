@@ -3,7 +3,7 @@
  * Plugin Name: Boardwalk Vintage GA4 Ecommerce Tracking
  * Plugin URI: https://shopboardwalkvintage.com
  * Description: Comprehensive GA4 ecommerce tracking for WooCommerce. Replaces WooCommerce Google Analytics plugin.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: Boardwalk Vintage
  * Author URI: https://shopboardwalkvintage.com
  * Requires at least: 5.0
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('BV_GA4_VERSION', '1.2.2');
+define('BV_GA4_VERSION', '1.2.3');
 define('BV_GA4_PLUGIN_DIR', plugin_dir_path(__FILE__));
 // Use plugins_url() directly for better symlink support
 define('BV_GA4_PLUGIN_URL', plugins_url('', __FILE__));
@@ -67,6 +67,7 @@ class BV_GA4_Tracking {
         add_action('woocommerce_add_to_cart', array($this, 'queue_add_to_cart'), 10, 6);
         add_action('wp_ajax_bv_ga4_pending', array($this, 'send_pending_events'));
         add_action('wp_ajax_nopriv_bv_ga4_pending', array($this, 'send_pending_events'));
+        add_action('woocommerce_checkout_create_order', array($this, 'save_wallet_type'), 10, 2);
     }
 
     /**
@@ -111,6 +112,24 @@ class BV_GA4_Tracking {
             return $posted;
         }
         return isset($_GET['add-to-cart']) ? 'link' : 'product_page';
+    }
+
+    /**
+     * Record which wallet paid. Square saves an Apple Pay or Google Pay order
+     * as a plain card order (square_credit_card), so nothing on the order says
+     * a wallet was used. Its wallet checkout posts wc-square-digital-wallet-type
+     * ("apple-pay", "google-pay") through WooCommerce's checkout, which is the
+     * one place to catch it. Kept on the order as _bv_wallet_type, and sent as
+     * the purchase event's payment_type.
+     */
+    public function save_wallet_type($order, $data) {
+        if (empty($_POST['wc-square-digital-wallet-type'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- WC_Checkout checked the nonce
+            return;
+        }
+        $wallet = sanitize_key(wp_unslash($_POST['wc-square-digital-wallet-type'])); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        if ($wallet !== '') {
+            $order->update_meta_data('_bv_wallet_type', str_replace('-', '_', $wallet));
+        }
     }
 
     /** admin-ajax: hand queued events to track.js once, then clear them. */
@@ -724,10 +743,15 @@ class BV_GA4_Tracking {
             );
         }
         
+        // apple_pay / google_pay when a wallet paid, else the gateway
+        // (square_credit_card, paypal, ...).
+        $wallet = (string) $order->get_meta('_bv_wallet_type');
+
         return array(
             'transaction_id' => $order_id,
             'items' => $items,
-            'value' => $total_value
+            'value' => $total_value,
+            'payment_type' => $wallet !== '' ? $wallet : (string) $order->get_payment_method()
         );
     }
     

@@ -387,6 +387,7 @@
             transaction_id: String(tracking.order_data.transaction_id || ''),
             currency: 'USD',
             value: tracking.order_data.value || 0,
+            payment_type: tracking.order_data.payment_type || '',
             items: (tracking.order_data.items || []).map(formatProduct)
         });
     }
